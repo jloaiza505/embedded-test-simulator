@@ -1,1 +1,1 @@
-from .client import DeviceClient, InvalidResponseError
+from .client import DeviceClient, DeviceConnectionError, InvalidResponseError

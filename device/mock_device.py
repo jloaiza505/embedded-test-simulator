@@ -16,6 +16,8 @@ class MockDevice:
         self.mode = "AUTO"
         self.temperature = 25.0
         self.status = "OK"
+        self.files = {"log.txt": "firmware-log-v1"}
+        self._faults = {}
         self._stop = threading.Event()
         self._ready = threading.Event()
         self._thread = None
@@ -55,8 +57,11 @@ class MockDevice:
                     continue
                 except OSError:
                     break
-                with conn:
-                    self._handle(conn)
+                threading.Thread(target=self._handle_client, args=(conn,), daemon=True).start()
+
+    def _handle_client(self, conn):
+        with conn:
+            self._handle(conn)
 
     def _handle(self, conn):
         data = conn.recv(1024)
@@ -69,21 +74,49 @@ class MockDevice:
             return
         if self.failure_mode == "delay":
             time.sleep(self.delay_seconds)
-        response = "???" if self.failure_mode == "corrupt" else self._process(command)
-        LOG.info("resp %s", response)
-        conn.sendall(f"{response}\n".encode())
+        if self.failure_mode == "disconnect":
+            return
+        if self.failure_mode == "partial":
+            conn.sendall(b"TEMP:")
+            return
+        if self.failure_mode == "corrupt":
+            conn.sendall(b"???\n")
+            return
+        if self.failure_mode == "flaky_timeout" and not self._faults.get(command):
+            self._faults[command] = 1
+            time.sleep(self.delay_seconds * 2)
+            return
+        if self.failure_mode == "bad_temp":
+            conn.sendall(b"TEMP:999.0\n")
+            return
+        if self.failure_mode == "bad_status":
+            conn.sendall(b"STATUS:BOOTING\n")
+            return
+        if self.failure_mode == "file_cut" and command.startswith("READ_FILE "):
+            conn.sendall(b"FILE:15:log.txt\nfirm")
+            return
+        response = self._process(command)
+        LOG.info("resp %r", response)
+        conn.sendall(response)
 
     def _process(self, command):
         if command == "PING":
-            return "OK"
+            return b"OK\n"
         if command == "READ_TEMP":
-            return f"TEMP:{self.temperature:.1f}"
+            return f"TEMP:{self.temperature:.1f}\n".encode()
         if command.startswith("SET_MODE "):
             mode = command.split(" ", 1)[1]
             if mode in {"AUTO", "MANUAL"}:
                 self.mode = mode
-                return f"MODE:{mode}"
-            return "ERROR:BAD_MODE"
+                return f"MODE:{mode}\n".encode()
+            return b"ERROR:BAD_MODE\n"
         if command == "GET_STATUS":
-            return f"STATUS:{self.status}"
-        return "ERROR:BAD_CMD"
+            return f"STATUS:{self.status}\n".encode()
+        if command.startswith("READ_FILE "):
+            name = command.split(" ", 1)[1]
+            payload = self.files.get(name)
+            if payload is None:
+                return b"ERROR:NO_FILE\n"
+            header = f"FILE:{len(payload)}:{name}\n".encode()
+            return header + payload.encode()
+        return b"ERROR:BAD_CMD\n"

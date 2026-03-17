@@ -97,6 +97,7 @@ Supported commands:
 - `SET_MODE AUTO`
 - `SET_MODE MANUAL`
 - `GET_STATUS`
+- `READ_FILE <name>`
 
 Supported response formats:
 
@@ -104,6 +105,7 @@ Supported response formats:
 - `TEMP:<value>`
 - `MODE:<value>`
 - `STATUS:<value>`
+- `FILE:<size>:<name>` followed by payload bytes
 - `ERROR:<code>`
 
 Examples:
@@ -113,6 +115,7 @@ Examples:
 - `SET_MODE MANUAL` -> `MODE:MANUAL`
 - `GET_STATUS` -> `STATUS:OK`
 - `BOGUS` -> `ERROR:BAD_CMD`
+- `READ_FILE log.txt` -> `FILE:15:log.txt` + `firmware-log-v1`
 
 ## How The Client Works
 
@@ -123,6 +126,7 @@ Examples:
 - `set_mode(mode)`
 - `get_status()`
 - `command(command)` for raw command access
+- `read_file(name)` for small framed file reads
 
 Internally, `_send()` handles the transport behavior:
 
@@ -171,12 +175,23 @@ The device supports these runtime modes through `set_failure_mode(...)`:
 - `timeout`: intentionally do not respond before the client timeout expires
 - `delay`: pause before returning a valid response
 - `corrupt`: return malformed data (`???`) instead of a valid protocol response
+- `disconnect`: accept the request and close the connection without a reply
+- `partial`: send a truncated response
+- `flaky_timeout`: fail once, then succeed to validate retries
+- `bad_temp`: send a syntactically valid but semantically invalid temperature
+- `bad_status`: send an unsupported status value
+- `file_cut`: interrupt a file transfer mid-payload
 
 These modes are the key to testing robustness:
 
 - `timeout` validates client-side timeout handling
 - `delay` validates that the client still works when given a large enough timeout
 - `corrupt` validates strict response parsing
+- `disconnect` validates mid-transaction link loss handling
+- `partial` validates truncated payload handling
+- `flaky_timeout` validates retry recovery
+- `bad_temp` and `bad_status` validate semantic response checking
+- `file_cut` validates interrupted transfer detection
 
 Because failure mode is controlled at runtime, the same server implementation can be reused across all tests.
 
@@ -218,6 +233,7 @@ These tests validate expected behavior:
 - invalid commands return protocol-level errors
 - mode changes work for both `AUTO` and `MANUAL`
 - rapid repeated commands remain stable
+- file reads return complete payloads
 
 The rapid-command test is a simple stability check. It does not try to benchmark performance; it verifies that repeated calls do not break the request/response flow.
 
@@ -226,8 +242,13 @@ The rapid-command test is a simple stability check. It does not try to benchmark
 These tests validate failure handling:
 
 - timeout mode raises `TimeoutError`
+- no-device mode raises `DeviceConnectionError`
+- disconnect mode raises a transport failure
+- partial and corrupt responses raise `InvalidResponseError`
 - delay mode succeeds when the client timeout is large enough
-- corrupt mode raises `InvalidResponseError`
+- flaky timeout succeeds when retries are enabled
+- invalid temperature and status values are rejected
+- interrupted file transfer is detected
 
 This is the core of the project’s testing value: the client is verified not only for the happy path, but also for realistic communication failures.
 
