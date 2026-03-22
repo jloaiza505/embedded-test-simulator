@@ -366,13 +366,3 @@ Result:
 
 - `8 passed`
 
-## Summary
-
-This repository is a compact example of a testable embedded communication simulation:
-
-- a client that enforces protocol expectations
-- a mock device with internal state and failure injection
-- a deterministic pytest suite
-- a CI workflow for automated regression checking
-
-It is small enough to understand quickly and structured enough to reflect real engineering practice.
